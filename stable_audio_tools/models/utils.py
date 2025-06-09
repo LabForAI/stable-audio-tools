@@ -3,6 +3,7 @@ from safetensors.torch import load_file
 
 from torch.nn.utils import remove_weight_norm
 
+
 def copy_state_dict(model, state_dict):
     """Load state_dict to model, but only for keys that match exactly.
 
@@ -11,22 +12,39 @@ def copy_state_dict(model, state_dict):
         state_dict (OrderedDict): state_dict to load.
     """
     model_state_dict = model.state_dict()
+
+    for key in model_state_dict:
+        if key not in state_dict:
+            print(f"Key {key} not found in state_dict")
+        elif model_state_dict[key].shape != state_dict[key].shape:
+            print(
+                f"Key {key} shape mismatch: "
+                f"{model_state_dict[key].shape} vs {state_dict[key].shape}"
+            )
+
     for key in state_dict:
-        if key in model_state_dict and state_dict[key].shape == model_state_dict[key].shape:
+        if (
+            key in model_state_dict
+            and state_dict[key].shape == model_state_dict[key].shape
+        ):
             if isinstance(state_dict[key], torch.nn.Parameter):
                 # backwards compatibility for serialized parameters
                 state_dict[key] = state_dict[key].data
             model_state_dict[key] = state_dict[key]
 
-    model.load_state_dict(model_state_dict, strict=False)
+    model.load_state_dict(model_state_dict, strict=True)
+
 
 def load_ckpt_state_dict(ckpt_path):
     if ckpt_path.endswith(".safetensors"):
         state_dict = load_file(ckpt_path)
     else:
-        state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=True)["state_dict"]
-    
+        state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=True)[
+            "state_dict"
+        ]
+
     return state_dict
+
 
 def remove_weight_norm_from_model(model):
     for module in model.modules():
@@ -36,8 +54,11 @@ def remove_weight_norm_from_model(model):
 
     return model
 
+
 try:
-    torch._dynamo.config.cache_size_limit = max(64, torch._dynamo.config.cache_size_limit)
+    torch._dynamo.config.cache_size_limit = max(
+        64, torch._dynamo.config.cache_size_limit
+    )
     torch._dynamo.config.suppress_errors = True
 except Exception as e:
     pass
@@ -45,10 +66,12 @@ except Exception as e:
 # Get torch.compile flag from environment variable ENABLE_TORCH_COMPILE
 
 import os
+
 enable_torch_compile = os.environ.get("ENABLE_TORCH_COMPILE", "0") == "1"
 
+
 def compile(function, *args, **kwargs):
-    
+
     if enable_torch_compile:
         try:
             return torch.compile(function, *args, **kwargs)
@@ -57,10 +80,14 @@ def compile(function, *args, **kwargs):
 
     return function
 
+
 # Sampling functions copied from https://github.com/facebookresearch/audiocraft/blob/main/audiocraft/utils/utils.py under MIT license
 # License can be found in LICENSES/LICENSE_META.txt
 
-def multinomial(input: torch.Tensor, num_samples: int, replacement=False, *, generator=None):
+
+def multinomial(
+    input: torch.Tensor, num_samples: int, replacement=False, *, generator=None
+):
     """torch.multinomial with arbitrary number of dimensions, and number of candidates on the last dimension.
 
     Args:
@@ -80,7 +107,9 @@ def multinomial(input: torch.Tensor, num_samples: int, replacement=False, *, gen
         return torch.argmax(input / q, dim=-1, keepdim=True).to(torch.int64)
 
     input_ = input.reshape(-1, input.shape[-1])
-    output_ = torch.multinomial(input_, num_samples=num_samples, replacement=replacement, generator=generator)
+    output_ = torch.multinomial(
+        input_, num_samples=num_samples, replacement=replacement, generator=generator
+    )
     output = output_.reshape(*list(input.shape[:-1]), -1)
     return output
 
@@ -120,8 +149,10 @@ def sample_top_p(probs: torch.Tensor, p: float) -> torch.Tensor:
     next_token = torch.gather(probs_idx, -1, next_token)
     return next_token
 
+
 def next_power_of_two(n):
     return 2 ** (n - 1).bit_length()
+
 
 def next_multiple_of_64(n):
     return ((n + 63) // 64) * 64

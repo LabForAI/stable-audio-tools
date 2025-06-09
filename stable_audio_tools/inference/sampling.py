@@ -5,24 +5,35 @@ import torch.distributions as dist
 
 import k_diffusion as K
 
+
 # Define the noise schedule and sampling loop
 def get_alphas_sigmas(t):
     """Returns the scaling factors for the clean image (alpha) and for the
     noise (sigma), given a timestep."""
     return torch.cos(t * math.pi / 2), torch.sin(t * math.pi / 2)
 
+
 def alpha_sigma_to_t(alpha, sigma):
     """Returns a timestep, given the scaling factors for the clean image and for
     the noise."""
     return torch.atan2(sigma, alpha) / math.pi * 2
+
 
 def t_to_alpha_sigma(t):
     """Returns the scaling factors for the clean image and for the noise, given
     a timestep."""
     return torch.cos(t * math.pi / 2), torch.sin(t * math.pi / 2)
 
+
 class DistributionShift:
-    def __init__(self, base_shift=0.5, max_shift=1.15, max_length=4096, min_length=256, use_sine=False):
+    def __init__(
+        self,
+        base_shift=0.5,
+        max_shift=1.15,
+        max_length=4096,
+        min_length=256,
+        use_sine=False,
+    ):
         self.base_shift = base_shift
         self.max_shift = max_shift
         self.max_length = max_length
@@ -31,13 +42,19 @@ class DistributionShift:
 
     def time_shift(self, t: torch.Tensor, seq_len: int):
         sigma = 1.0
-        mu = - (self.base_shift + (self.max_shift - self.base_shift) * (seq_len - self.min_length) / (self.max_length - self.min_length))
+        mu = -(
+            self.base_shift
+            + (self.max_shift - self.base_shift)
+            * (seq_len - self.min_length)
+            / (self.max_length - self.min_length)
+        )
         t_out = 1 - math.exp(mu) / (math.exp(mu) + (1 / (1 - t) - 1) ** sigma)
 
         if self.use_sine:
             t_out = torch.sin(t_out * math.pi / 2)
 
         return t_out
+
 
 def sample_timesteps_logsnr(batch_size, mean_logsnr=-1.2, std_logsnr=2.0):
     """
@@ -63,6 +80,8 @@ def sample_timesteps_logsnr(batch_size, mean_logsnr=-1.2, std_logsnr=2.0):
     t = t.clamp(1e-4, 1 - 1e-4)
 
     return t
+
+
 def truncated_logistic_normal_rescaled(shape, left_trunc=0.075, right_trunc=1):
     """
 
@@ -93,11 +112,24 @@ def truncated_logistic_normal_rescaled(shape, left_trunc=0.075, right_trunc=1):
 
     return rescaled_samples
 
+
 @torch.no_grad()
-def sample_discrete_euler(model, x, steps=None, sigma_max=1, sigmas=None, callback=None, dist_shift=None, disable_tqdm=False, **extra_args):
+def sample_discrete_euler(
+    model,
+    x,
+    steps=None,
+    sigma_max=1,
+    sigmas=None,
+    callback=None,
+    dist_shift=None,
+    disable_tqdm=False,
+    **extra_args,
+):
     """Draws samples from a model given starting noise. Euler method"""
 
-    assert steps is not None or sigmas is not None, "Either steps or sigmas must be provided"
+    assert (
+        steps is not None or sigmas is not None
+    ), "Either steps or sigmas must be provided"
 
     # Make tensor of ones to broadcast the single t values
     ts = x.new_ones([x.shape[0]])
@@ -113,9 +145,11 @@ def sample_discrete_euler(model, x, steps=None, sigma_max=1, sigmas=None, callba
     else:
         t = sigmas
 
-    #alphas, sigmas = 1-t, t
+    # alphas, sigmas = 1-t, t
 
-    for i, (t_curr, t_prev) in enumerate(tqdm(zip(t[:-1], t[1:]), disable=disable_tqdm)):
+    for i, (t_curr, t_prev) in enumerate(
+        tqdm(zip(t[:-1], t[1:]), disable=disable_tqdm)
+    ):
         # Broadcast the current timestep to the correct shape
         t_curr_tensor = t_curr * torch.ones(
             (x.shape[0],), dtype=x.dtype, device=x.device
@@ -124,26 +158,42 @@ def sample_discrete_euler(model, x, steps=None, sigma_max=1, sigmas=None, callba
         dt = t_prev - t_curr  # we solve backwards in our formulation
 
         v = model(x, t_curr_tensor, **extra_args)
+        v = v[:, : x.shape[1], :]  # Ensure v has the same shape as x
+
         x = x + dt * v
 
         if callback is not None:
             denoised = x - t_prev * v
-            callback({'x': x, 't': t_curr, 'sigma': t_curr, 'i': i+1, 'denoised': denoised })
+            callback(
+                {"x": x, "t": t_curr, "sigma": t_curr, "i": i + 1, "denoised": denoised}
+            )
 
     # If we are on the last timestep, output the denoised data
     return x
 
+
 @torch.no_grad()
-def sample_rk4(model, x, steps=None, sigma_max=1, sigmas=None, callback=None, dist_shift=None, **extra_args):
+def sample_rk4(
+    model,
+    x,
+    steps=None,
+    sigma_max=1,
+    sigmas=None,
+    callback=None,
+    dist_shift=None,
+    **extra_args,
+):
     """Draws samples from a model given starting noise. 4th-order Runge-Kutta"""
 
-    assert steps is not None or sigmas is not None, "Either steps or sigmas must be provided"
+    assert (
+        steps is not None or sigmas is not None
+    ), "Either steps or sigmas must be provided"
 
     # Make tensor of ones to broadcast the single t values
     ts = x.new_ones([x.shape[0]])
 
     if sigmas is None:
-        
+
         # Create the noise schedule
         t = torch.linspace(sigma_max, 0, steps + 1)
 
@@ -153,7 +203,7 @@ def sample_rk4(model, x, steps=None, sigma_max=1, sigmas=None, callback=None, di
     else:
         t = sigmas
 
-    #alphas, sigmas = 1-t, t
+    # alphas, sigmas = 1-t, t
 
     for i, (t_curr, t_prev) in enumerate(tqdm(zip(t[:-1], t[1:]))):
         # Broadcast the current timestep to the correct shape
@@ -169,16 +219,31 @@ def sample_rk4(model, x, steps=None, sigma_max=1, sigmas=None, callback=None, di
 
         if callback is not None:
             denoised = x - t_prev * k4
-            callback({'x': x, 't': t_curr, 'sigma': t_curr, 'i': i+1, 'denoised': denoised })
+            callback(
+                {"x": x, "t": t_curr, "sigma": t_curr, "i": i + 1, "denoised": denoised}
+            )
 
     # If we are on the last timestep, output the denoised data
     return x
 
+
 @torch.no_grad()
-def sample_flow_dpmpp(model, x, steps=None, sigma_max=1, sigmas=None, callback=None, dist_shift=None, disable_tqdm=False, **extra_args):
+def sample_flow_dpmpp(
+    model,
+    x,
+    steps=None,
+    sigma_max=1,
+    sigmas=None,
+    callback=None,
+    dist_shift=None,
+    disable_tqdm=False,
+    **extra_args,
+):
     """Draws samples from a model given starting noise. DPM-Solver++ for RF models"""
 
-    assert steps is not None or sigmas is not None, "Either steps or sigmas must be provided"
+    assert (
+        steps is not None or sigmas is not None
+    ), "Either steps or sigmas must be provided"
 
     # Make tensor of ones to broadcast the single t values
     ts = x.new_ones([x.shape[0]])
@@ -190,13 +255,13 @@ def sample_flow_dpmpp(model, x, steps=None, sigma_max=1, sigmas=None, callback=N
 
         if dist_shift is not None:
             t = dist_shift.time_shift(t, x.shape[-1])
-    
+
     else:
         t = sigmas
 
     old_denoised = None
 
-    log_snr = lambda t: ((1-t) / t).log()
+    log_snr = lambda t: ((1 - t) / t).log()
 
     for i in trange(len(t) - 1, disable=disable_tqdm):
 
@@ -204,8 +269,10 @@ def sample_flow_dpmpp(model, x, steps=None, sigma_max=1, sigmas=None, callback=N
 
         denoised = x - t_curr * model(x, t_curr * ts, **extra_args)
         if callback is not None:
-            callback({'x': x, 'i': i, 't': t_curr, 'sigma': t_curr, 'denoised': denoised})
-        alpha_t = 1-t_next
+            callback(
+                {"x": x, "i": i, "t": t_curr, "sigma": t_curr, "denoised": denoised}
+            )
+        alpha_t = 1 - t_next
         h = log_snr(t_next) - log_snr(t_curr)
         if old_denoised is None or t_next == 0:
             x = (t_next / t_curr) * x - alpha_t * (-h).expm1() * denoised
@@ -217,11 +284,23 @@ def sample_flow_dpmpp(model, x, steps=None, sigma_max=1, sigmas=None, callback=N
         old_denoised = denoised
     return x
 
+
 @torch.no_grad()
-def sample_flow_pingpong(model, x, steps=None, sigma_max=1, sigmas=None, callback=None, dist_shift=None, **extra_args):
+def sample_flow_pingpong(
+    model,
+    x,
+    steps=None,
+    sigma_max=1,
+    sigmas=None,
+    callback=None,
+    dist_shift=None,
+    **extra_args,
+):
     """Draws samples from a model given starting noise. Ping-pong sampling for distilled models"""
 
-    assert steps is not None or sigmas is not None, "Either steps or sigmas must be provided"
+    assert (
+        steps is not None or sigmas is not None
+    ), "Either steps or sigmas must be provided"
 
     # Make tensor of ones to broadcast the single t values
     ts = x.new_ones([x.shape[0]])
@@ -233,7 +312,7 @@ def sample_flow_pingpong(model, x, steps=None, sigma_max=1, sigmas=None, callbac
 
         if dist_shift is not None:
             t = dist_shift.time_shift(t, x.shape[-1])
-    
+
     else:
         t = sigmas
 
@@ -241,16 +320,35 @@ def sample_flow_pingpong(model, x, steps=None, sigma_max=1, sigmas=None, callbac
 
         denoised = x - t[i] * model(x, t[i] * ts, **extra_args)
         if callback is not None:
-            callback({'x': x, 'i': i, 't': t[i], 'sigma': t[i], 'sigma_hat': t[i], 'denoised': denoised})
+            callback(
+                {
+                    "x": x,
+                    "i": i,
+                    "t": t[i],
+                    "sigma": t[i],
+                    "sigma_hat": t[i],
+                    "denoised": denoised,
+                }
+            )
 
         t_next = t[i + 1]
-        x = (1-t_next) * denoised + t_next * torch.randn_like(x)
+        x = (1 - t_next) * denoised + t_next * torch.randn_like(x)
 
     return x
 
 
 @torch.no_grad()
-def sample(model, x, steps, eta, callback=None, sigma_max=1.0, dist_shift=None, cfg_pp=False, **extra_args):
+def sample(
+    model,
+    x,
+    steps,
+    eta,
+    callback=None,
+    sigma_max=1.0,
+    dist_shift=None,
+    cfg_pp=False,
+    **extra_args,
+):
     """Draws samples from a model given starting noise. v-diffusion"""
     ts = x.new_ones([x.shape[0]])
 
@@ -277,6 +375,8 @@ def sample(model, x, steps, eta, callback=None, sigma_max=1.0, dist_shift=None, 
             v = model(x, ts * t[i], **extra_args)
             v_eps = v
 
+        v = v[:, : x.shape[1], :]
+        v_eps = v_eps[:, : x.shape[1], :]
         # Predict the noise and the denoised data
         pred = x * alphas[i] - v * sigmas[i]
         eps = x * sigmas[i] + v_eps * alphas[i]
@@ -286,9 +386,12 @@ def sample(model, x, steps, eta, callback=None, sigma_max=1.0, dist_shift=None, 
         if i < steps - 1:
             # If eta > 0, adjust the scaling factor for the predicted noise
             # downward according to the amount of additional noise to add
-            ddim_sigma = eta * (sigmas[i + 1]**2 / sigmas[i]**2).sqrt() * \
-                (1 - alphas[i]**2 / alphas[i + 1]**2).sqrt()
-            adjusted_sigma = (sigmas[i + 1]**2 - ddim_sigma**2).sqrt()
+            ddim_sigma = (
+                eta
+                * (sigmas[i + 1] ** 2 / sigmas[i] ** 2).sqrt()
+                * (1 - alphas[i] ** 2 / alphas[i + 1] ** 2).sqrt()
+            )
+            adjusted_sigma = (sigmas[i + 1] ** 2 - ddim_sigma**2).sqrt()
 
             # Recombine the predicted noise and predicted denoised data in the
             # correct proportions for the next step
@@ -300,18 +403,22 @@ def sample(model, x, steps, eta, callback=None, sigma_max=1.0, dist_shift=None, 
 
         if callback is not None:
             denoised = pred
-            callback({'x': x, 't': t[i], 'sigma': sigmas[i], 'i': i, 'denoised': denoised })
+            callback(
+                {"x": x, "t": t[i], "sigma": sigmas[i], "i": i, "denoised": denoised}
+            )
 
     # If we are on the last timestep, output the denoised data
     return pred
 
+
 # Soft mask inpainting is just shrinking hard (binary) mask inpainting
 # Given a float-valued soft mask (values between 0 and 1), get the binary mask for this particular step
 def get_bmask(i, steps, mask):
-    strength = (i+1)/(steps)
+    strength = (i + 1) / (steps)
     # convert to binary mask
-    bmask = torch.where(mask<=strength,1,0)
+    bmask = torch.where(mask <= strength, 1, 0)
     return bmask
+
 
 def make_cond_model_fn(model, cond_fn):
     def cond_model_fn(x, sigma, **kwargs):
@@ -319,30 +426,44 @@ def make_cond_model_fn(model, cond_fn):
             x = x.detach().requires_grad_()
             denoised = model(x, sigma, **kwargs)
             cond_grad = cond_fn(x, sigma, denoised=denoised, **kwargs).detach()
-            cond_denoised = denoised.detach() + cond_grad * K.utils.append_dims(sigma**2, x.ndim)
+            cond_denoised = denoised.detach() + cond_grad * K.utils.append_dims(
+                sigma**2, x.ndim
+            )
         return cond_denoised
+
     return cond_model_fn
+
 
 # Uses k-diffusion from https://github.com/crowsonkb/k-diffusion
 # init_data is init_audio as latents (if this is latent diffusion)
 # For sampling, init_data to none
 # For variations, set init_data
 def sample_k(
-        model_fn,
-        noise,
-        init_data=None,
-        steps=100,
-        sampler_type="dpmpp-2m-sde",
-        sigma_min=0.01,
-        sigma_max=100,
-        rho=1.0,
-        device="cuda",
-        callback=None,
-        cond_fn=None,
-        **extra_args
-    ):
+    model_fn,
+    noise,
+    init_data=None,
+    steps=100,
+    sampler_type="dpmpp-2m-sde",
+    sigma_min=0.01,
+    sigma_max=100,
+    rho=1.0,
+    device="cuda",
+    callback=None,
+    cond_fn=None,
+    **extra_args,
+):
 
-    is_k_diff = sampler_type in ["k-heun", "k-lms", "k-dpmpp-2s-ancestral", "k-dpm-2", "k-dpm-fast", "k-dpm-adaptive", "dpmpp-2m-sde", "dpmpp-3m-sde","dpmpp-2m"]
+    is_k_diff = sampler_type in [
+        "k-heun",
+        "k-lms",
+        "k-dpmpp-2s-ancestral",
+        "k-dpm-2",
+        "k-dpm-fast",
+        "k-dpm-adaptive",
+        "dpmpp-2m-sde",
+        "dpmpp-3m-sde",
+        "dpmpp-2m",
+    ]
     is_v_diff = sampler_type in ["v-ddim", "v-ddim-cfgpp"]
 
     if is_k_diff:
@@ -353,7 +474,9 @@ def sample_k(
             denoiser = make_cond_model_fn(denoiser, cond_fn)
 
         # Make the list of sigmas. Sigma values are scalars related to the amount of noise each denoising step has
-        sigmas = K.sampling.get_sigmas_polyexponential(steps, sigma_min, sigma_max, rho, device=device)
+        sigmas = K.sampling.get_sigmas_polyexponential(
+            steps, sigma_min, sigma_max, rho, device=device
+        )
         # Scale the initial noise by sigma
         noise = noise * sigmas[0]
 
@@ -365,28 +488,95 @@ def sample_k(
             # set the initial latent to noise
             x = noise
 
-
         if sampler_type == "k-heun":
-            return K.sampling.sample_heun(denoiser, x, sigmas, disable=False, callback=callback, extra_args=extra_args)
+            return K.sampling.sample_heun(
+                denoiser,
+                x,
+                sigmas,
+                disable=False,
+                callback=callback,
+                extra_args=extra_args,
+            )
         elif sampler_type == "k-lms":
-            return K.sampling.sample_lms(denoiser, x, sigmas, disable=False, callback=callback, extra_args=extra_args)
+            return K.sampling.sample_lms(
+                denoiser,
+                x,
+                sigmas,
+                disable=False,
+                callback=callback,
+                extra_args=extra_args,
+            )
         elif sampler_type == "k-dpmpp-2s-ancestral":
-            return K.sampling.sample_dpmpp_2s_ancestral(denoiser, x, sigmas, disable=False, callback=callback, extra_args=extra_args)
+            return K.sampling.sample_dpmpp_2s_ancestral(
+                denoiser,
+                x,
+                sigmas,
+                disable=False,
+                callback=callback,
+                extra_args=extra_args,
+            )
         elif sampler_type == "k-dpm-2":
-            return K.sampling.sample_dpm_2(denoiser, x, sigmas, disable=False, callback=callback, extra_args=extra_args)
+            return K.sampling.sample_dpm_2(
+                denoiser,
+                x,
+                sigmas,
+                disable=False,
+                callback=callback,
+                extra_args=extra_args,
+            )
         elif sampler_type == "k-dpm-fast":
-            return K.sampling.sample_dpm_fast(denoiser, x, sigma_min, sigma_max, steps, disable=False, callback=callback, extra_args=extra_args)
+            return K.sampling.sample_dpm_fast(
+                denoiser,
+                x,
+                sigma_min,
+                sigma_max,
+                steps,
+                disable=False,
+                callback=callback,
+                extra_args=extra_args,
+            )
         elif sampler_type == "k-dpm-adaptive":
-            return K.sampling.sample_dpm_adaptive(denoiser, x, sigma_min, sigma_max, rtol=0.01, atol=0.01, disable=False, callback=callback, extra_args=extra_args)
+            return K.sampling.sample_dpm_adaptive(
+                denoiser,
+                x,
+                sigma_min,
+                sigma_max,
+                rtol=0.01,
+                atol=0.01,
+                disable=False,
+                callback=callback,
+                extra_args=extra_args,
+            )
         elif sampler_type == "dpmpp-2m":
-            return K.sampling.sample_dpmpp_2m(denoiser, x, sigmas, disable=False, callback=callback, extra_args=extra_args)
+            return K.sampling.sample_dpmpp_2m(
+                denoiser,
+                x,
+                sigmas,
+                disable=False,
+                callback=callback,
+                extra_args=extra_args,
+            )
         elif sampler_type == "dpmpp-2m-sde":
-            return K.sampling.sample_dpmpp_2m_sde(denoiser, x, sigmas, disable=False, callback=callback, extra_args=extra_args)
+            return K.sampling.sample_dpmpp_2m_sde(
+                denoiser,
+                x,
+                sigmas,
+                disable=False,
+                callback=callback,
+                extra_args=extra_args,
+            )
         elif sampler_type == "dpmpp-3m-sde":
-            return K.sampling.sample_dpmpp_3m_sde(denoiser, x, sigmas, disable=False, callback=callback, extra_args=extra_args)
+            return K.sampling.sample_dpmpp_3m_sde(
+                denoiser,
+                x,
+                sigmas,
+                disable=False,
+                callback=callback,
+                extra_args=extra_args,
+            )
     elif is_v_diff:
 
-        if sigma_max > 1: # sigma_max should be between 0 and 1
+        if sigma_max > 1:  # sigma_max should be between 0 and 1
             sigma_max = 1
 
         if cond_fn is not None:
@@ -401,25 +591,35 @@ def sample_k(
 
         if sampler_type == "v-ddim" or sampler_type == "v-ddim-cfgpp":
             use_cfg_pp = sampler_type == "v-ddim-cfgpp"
-            return sample(model_fn, x, steps, eta=0.0, sigma_max=sigma_max, cfg_pp=use_cfg_pp, callback=callback, **extra_args)
+            return sample(
+                model_fn,
+                x,
+                steps,
+                eta=0.0,
+                sigma_max=sigma_max,
+                cfg_pp=use_cfg_pp,
+                callback=callback,
+                **extra_args,
+            )
     else:
         raise ValueError(f"Unknown sampler type {sampler_type}")
+
 
 # init_data is init_audio as latents (if this is latent diffusion)
 # For sampling, set both init_data and mask to None
 # For variations, set init_data
 def sample_rf(
-        model_fn,
-        noise,
-        init_data=None,
-        steps=100,
-        sampler_type="euler",
-        sigma_max=1,
-        device="cuda",
-        callback=None,
-        cond_fn=None,
-        **extra_args
-    ):
+    model_fn,
+    noise,
+    init_data=None,
+    steps=100,
+    sampler_type="euler",
+    sigma_max=1,
+    device="cuda",
+    callback=None,
+    cond_fn=None,
+    **extra_args,
+):
 
     if sigma_max > 1:
         sigma_max = 1
@@ -438,7 +638,7 @@ def sample_rf(
         # set the initial latent to noise
         x = noise
 
-    logsnr_max = math.log(((1-sigma_max)/sigma_max) + 1e-6) if sigma_max < 1 else -6
+    logsnr_max = math.log(((1 - sigma_max) / sigma_max) + 1e-6) if sigma_max < 1 else -6
 
     logsnr = torch.linspace(logsnr_max, 2, steps + 1)
 
@@ -448,10 +648,18 @@ def sample_rf(
     t[-1] = 0
 
     if sampler_type == "euler":
-        return sample_discrete_euler(model_fn, x, sigmas=t, sigma_max=sigma_max, callback=callback, **extra_args)
+        return sample_discrete_euler(
+            model_fn, x, sigmas=t, sigma_max=sigma_max, callback=callback, **extra_args
+        )
     elif sampler_type == "rk4":
-        return sample_rk4(model_fn, x, steps, sigma_max, callback=callback, **extra_args)
+        return sample_rk4(
+            model_fn, x, steps, sigma_max, callback=callback, **extra_args
+        )
     elif sampler_type == "dpmpp":
-        return sample_flow_dpmpp(model_fn, x, sigmas=t, sigma_max=sigma_max, callback=callback, **extra_args)
+        return sample_flow_dpmpp(
+            model_fn, x, sigmas=t, sigma_max=sigma_max, callback=callback, **extra_args
+        )
     elif sampler_type == "pingpong":
-        return sample_flow_pingpong(model_fn, x, sigmas=t, sigma_max=sigma_max, callback=callback, **extra_args)
+        return sample_flow_pingpong(
+            model_fn, x, sigmas=t, sigma_max=sigma_max, callback=callback, **extra_args
+        )
